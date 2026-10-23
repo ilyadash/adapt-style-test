@@ -16,9 +16,9 @@ OUTPUT_PATHS: dict[str, Path] = {
     "type2": PROJECT_ROOT / "outputs_type2.txt",
 }
 
-BASE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+BASE_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 SEED = 42
-MAX_SEQ_LEN = 1024
+MAX_SEQ_LEN = 768
 
 LORA_R = 8
 LORA_ALPHA = 16
@@ -26,12 +26,14 @@ LORA_DROPOUT = 0.1
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
 TRAIN_EPOCHS = 10
-TRAIN_BATCH_SIZE = 2
-GRADIENT_ACCUMULATION_STEPS = 2
+TRAIN_BATCH_SIZE = 1
+GRADIENT_ACCUMULATION_STEPS = 4
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.0
 WARMUP_RATIO = 0.1
 MAX_GRAD_NORM = 1.0
+VAL_SIZE = 5
+EARLY_STOPPING_PATIENCE = 2
 
 ADAPTER_DIRS: dict[str, Path] = {
     "type1": ARTIFACTS_DIR / "lora_type1",
