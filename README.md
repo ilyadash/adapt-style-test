@@ -1,4 +1,4 @@
-# Адаптация Qwen2.5-1.5B-Instruct под стили Telegram-каналов
+# Адаптация Qwen2.5-3B-Instruct под стили Telegram-каналов
 
 Проект дообучает русскоязычную LLM переписывать нейтральные новости в стиле двух Telegram-каналов:
 
@@ -58,7 +58,7 @@ uv run python -m src.baseline --style type1
 uv run python -m src.baseline --style type2
 ```
 
-Результат: `artifacts/baseline_type1.json`, `artifacts/baseline_type2.json`. Эти файлы и адаптеры в git не коммитятся.
+Результат: `artifacts/baseline_type1.json`, `artifacts/baseline_type2.json`. Few-shot примеры выбираются случайно с фиксированным seed. Эти файлы и адаптеры в git не коммитятся.
 
 ## Обучение LoRA
 
@@ -79,15 +79,19 @@ uv run python -m src.train_lora --style type1 --max-steps 1 --output-dir artifac
 
 | Параметр | Значение |
 |---|---|
-| Базовая модель | `Qwen/Qwen2.5-1.5B-Instruct` |
+| Базовая модель | `Qwen/Qwen2.5-3B-Instruct` |
 | LoRA rank / alpha / dropout | 8 / 16 / 0.1 |
 | Целевые модули | `q_proj`, `k_proj`, `v_proj`, `o_proj` |
 | Learning rate | 1e-4 |
-| Эпохи | 10 |
-| Batch / gradient accumulation | 2 / 2 |
-| Max sequence length | 1024 |
+| Эпохи | 10, early stopping patience 2 |
+| Batch / gradient accumulation | 1 / 4 |
+| Max sequence length | 768 |
+| Validation | 20 train / 5 validation, seed 42 |
 | Optimizer / scheduler | AdamW / cosine, warmup 10% |
 | Seed | 42 |
+| Trainable parameters | 3,686,400 (0.119%) |
+
+На RTX 4070 SUPER (12 GB) обучение занимает около 95–100 секунд на стиль, пик VRAM — около 9.4–9.5 GB. `training_log.json` содержит `train_loss`, `eval_loss`, `eval_perplexity` и историю по эпохам.
 
 ## Генерация
 
@@ -103,7 +107,7 @@ artifacts/candidates_type1.json
 artifacts/candidates_type2.json
 ```
 
-Параметры генерации: `temperature=0.7`, `top_p=0.9`, `repetition_penalty=1.1`, `max_new_tokens=300`.
+Параметры генерации по умолчанию: `temperature=0.7`, `top_p=0.9`, `repetition_penalty=1.1`, `max_new_tokens=300`. Финальные outputs выбирались из расширенного пула: greedy (`do_sample=False`) плюс кандидаты с `temperature=0.5` и `0.7`; greedy даёт более стабильный текст без случайных чисел и иероглифов.
 
 ## Запись outputs
 
@@ -122,7 +126,7 @@ uv run python -m src.write_outputs \
   --selection artifacts/selection_type1.json
 ```
 
-Формат outputs: 5 постов в порядке `id`, разделитель — строка `---`.
+Формат outputs: 5 постов в порядке `id`, разделитель — строка `---`. При записи маркеры канала нормализуются: `@BankiOil` приводится к `@banki_oil`, ведущий `@banki_oil:` убирается, для type1 маркер добавляется в конец, если его нет.
 
 ## Воспроизведение baseline и LoRA
 
@@ -156,8 +160,8 @@ uv.lock
 
 ## Известные ограничения
 
-- Обучение на 25 примерах на стиль: модель уверенно копирует структуру канала, но может добавлять факты, которых нет во входном тексте.
-- Оценка стиля ручная; BLEU/ROUGE не использовались.
-- Лучшие кандидаты выбирались вручную, поэтому финальные outputs не являются полностью автоматическими.
+- Обучение на 25 примерах на стиль (20 train / 5 validation): 3B лучше держит структуру и числа, чем 1.5B, но всё ещё может добавлять факты, которых нет во входном тексте.
+- Оценка стиля ручная; BLEU/ROUGE не использовались. Для сравнения сохранены eval loss/perplexity, но они не измеряют факты и стиль.
+- Лучшие кандидаты выбирались вручную; greedy снижает разброс, но не устраняет галлюцинации.
 - vLLM не запускался локально: на Windows он не поддерживается без WSL2.
 - Адаптеры и кандидаты не коммитятся; их нужно воспроизвести командами выше.
