@@ -181,6 +181,11 @@ cython_debug/
 .cursorindexingignore
 # Project artifacts
 artifacts/
+data/
 
 uv.lock
+
+
+# Исходные данные не коммитятся
+data/
 
