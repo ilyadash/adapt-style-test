@@ -5,11 +5,12 @@ import contextlib
 import json
 import math
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import torch
-from peft import LoraConfig, get_peft_model
-from transformers import get_cosine_schedule_with_warmup
+from peft import LoraConfig, PeftModel, get_peft_model
+from transformers import PreTrainedTokenizerBase, get_cosine_schedule_with_warmup
 
 from src import config, data, modeling, prompts
 
@@ -73,24 +74,12 @@ def make_collator(pad_token_id: int):
     return collate
 
 
-def train_style(
-    style: str,
-    output_dir: Path,
-    epochs: int,
-    max_steps: int | None = None,
-) -> list[dict]:
-    """Обучает LoRA-адаптер для одного стиля.
-
-    Args:
-        style: Идентификатор стиля — ``type1`` или ``type2``.
-        output_dir: Каталог для адаптера и лога обучения.
-        epochs: Количество эпох.
-        max_steps: Ограничение числа шагов оптимизатора для smoke-запуска.
+def build_lora_model() -> tuple[PeftModel, PreTrainedTokenizerBase]:
+    """Загружает базовую модель и оборачивает её в LoRA.
 
     Returns:
-        История обучения со значениями loss и learning rate.
+        Модель с LoRA-адаптером в режиме обучения и её токенизатор.
     """
-    modeling.set_seed()
     tokenizer = modeling.load_tokenizer()
     model = modeling.load_base_model()
     model.config.use_cache = False
@@ -102,22 +91,62 @@ def train_style(
         bias="none",
         task_type="CAUSAL_LM",
     )
-    model = get_peft_model(model, lora_config)
-    model.train()
-    model.print_trainable_parameters()
+    peft_model = get_peft_model(model, lora_config)
+    peft_model.train()
+    peft_model.print_trainable_parameters()
+    return peft_model, tokenizer
 
-    records = data.load_train_records(style)
-    examples = [encode_example(record, tokenizer) for record in records]
-    collator = make_collator(tokenizer.pad_token_id)
-    device = modeling.get_device()
 
-    batch_size = config.TRAIN_BATCH_SIZE
-    accumulation = config.GRADIENT_ACCUMULATION_STEPS
-    micro_steps_per_epoch = math.ceil(len(examples) / batch_size)
-    steps_per_epoch = math.ceil(micro_steps_per_epoch / accumulation)
+def encode_records(
+    records: list[dict], tokenizer: PreTrainedTokenizerBase
+) -> list[dict]:
+    """Кодирует все записи датасета для обучения.
+
+    Args:
+        records: Записи с полями ``instruction``, ``input`` и ``output``.
+        tokenizer: Токенизатор Qwen.
+
+    Returns:
+        Список закодированных примеров.
+    """
+    return [encode_example(record, tokenizer) for record in records]
+
+
+def count_optimizer_steps(
+    num_examples: int, epochs: int, max_steps: int | None
+) -> int:
+    """Считает число шагов оптимизатора с учётом накопления градиента.
+
+    Args:
+        num_examples: Количество обучающих примеров.
+        epochs: Количество эпох.
+        max_steps: Ограничение числа шагов для smoke-запуска или ``None``.
+
+    Returns:
+        Итоговое число шагов оптимизатора.
+    """
+    micro_steps_per_epoch = math.ceil(num_examples / config.TRAIN_BATCH_SIZE)
+    steps_per_epoch = math.ceil(
+        micro_steps_per_epoch / config.GRADIENT_ACCUMULATION_STEPS
+    )
     total_steps = steps_per_epoch * epochs
     if max_steps is not None:
         total_steps = min(total_steps, max_steps)
+    return total_steps
+
+
+def build_optimizer_and_scheduler(
+    model: PeftModel, total_steps: int
+) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler]:
+    """Создаёт AdamW и cosine-планировщик для обучения LoRA.
+
+    Args:
+        model: Модель с LoRA-адаптером.
+        total_steps: Итоговое число шагов оптимизатора.
+
+    Returns:
+        Оптимизатор и планировщик learning rate.
+    """
     optimizer = torch.optim.AdamW(
         [parameter for parameter in model.parameters() if parameter.requires_grad],
         lr=config.LEARNING_RATE,
@@ -127,15 +156,58 @@ def train_style(
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
     )
+    return optimizer, scheduler
 
+
+def build_autocast(device: torch.device) -> contextlib.AbstractContextManager:
+    """Возвращает bf16 autocast на CUDA или пустой контекст на CPU.
+
+    Args:
+        device: Устройство обучения.
+
+    Returns:
+        Контекстный менеджер для прямого прохода.
+    """
+    if device.type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    return contextlib.nullcontext()
+
+
+def run_training_loop(
+    model: PeftModel,
+    examples: list[dict],
+    collator: Callable[[list[dict]], dict[str, torch.Tensor]],
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    device: torch.device,
+    style: str,
+    epochs: int,
+    total_steps: int,
+    max_steps: int | None,
+) -> list[dict]:
+    """Выполняет цикл обучения по эпохам и микробатчам.
+
+    Args:
+        model: Модель с LoRA-адаптером в режиме обучения.
+        examples: Закодированные обучающие примеры.
+        collator: Функция сборки батча.
+        optimizer: Оптимизатор.
+        scheduler: Планировщик learning rate.
+        device: Устройство обучения.
+        style: Идентификатор стиля для логов.
+        epochs: Количество эпох.
+        total_steps: Итоговое число шагов оптимизатора.
+        max_steps: Ограничение числа шагов или ``None``.
+
+    Returns:
+        История обучения со значениями loss и learning rate.
+    """
+    batch_size = config.TRAIN_BATCH_SIZE
+    accumulation = config.GRADIENT_ACCUMULATION_STEPS
+    autocast = build_autocast(device)
     history: list[dict] = []
     global_step = 0
-    started = time.time()
-    autocast = (
-        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-        if device.type == "cuda"
-        else contextlib.nullcontext()
-    )
+
     for epoch in range(epochs):
         order = torch.randperm(len(examples)).tolist()
         for batch_start in range(0, len(examples), batch_size):
@@ -171,15 +243,92 @@ def train_style(
         if max_steps is not None and global_step >= max_steps:
             break
 
+    return history
+
+
+def save_training_artifacts(
+    model: PeftModel,
+    tokenizer: PreTrainedTokenizerBase,
+    output_dir: Path,
+    style: str,
+    history: list[dict],
+    steps: int,
+    elapsed_sec: float,
+) -> None:
+    """Сохраняет LoRA-адаптер, токенизатор и лог обучения.
+
+    Args:
+        model: Обученная модель с LoRA-адаптером.
+        tokenizer: Токенизатор модели.
+        output_dir: Каталог для сохранения.
+        style: Идентификатор стиля.
+        history: История обучения.
+        steps: Число выполненных шагов оптимизатора.
+        elapsed_sec: Затраченное время в секундах.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
-    elapsed = round(time.time() - started, 1)
-    log = {"style": style, "steps": global_step, "elapsed_sec": elapsed, "history": history}
+    log = {
+        "style": style,
+        "steps": steps,
+        "elapsed_sec": elapsed_sec,
+        "history": history,
+    }
     (output_dir / "training_log.json").write_text(
         json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"[{style}] готово: {output_dir}, шагов={global_step}, {elapsed} с")
+
+
+def train_style(
+    style: str,
+    output_dir: Path,
+    epochs: int,
+    max_steps: int | None = None,
+) -> list[dict]:
+    """Обучает LoRA-адаптер для одного стиля.
+
+    Args:
+        style: Идентификатор стиля — ``type1`` или ``type2``.
+        output_dir: Каталог для адаптера и лога обучения.
+        epochs: Количество эпох.
+        max_steps: Ограничение числа шагов оптимизатора для smoke-запуска.
+
+    Returns:
+        История обучения со значениями loss и learning rate.
+    """
+    modeling.set_seed()
+    model, tokenizer = build_lora_model()
+    examples = encode_records(data.load_train_records(style), tokenizer)
+    collator = make_collator(tokenizer.pad_token_id)
+    device = modeling.get_device()
+    total_steps = count_optimizer_steps(len(examples), epochs, max_steps)
+    optimizer, scheduler = build_optimizer_and_scheduler(model, total_steps)
+
+    started = time.time()
+    history = run_training_loop(
+        model=model,
+        examples=examples,
+        collator=collator,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=device,
+        style=style,
+        epochs=epochs,
+        total_steps=total_steps,
+        max_steps=max_steps,
+    )
+    elapsed = round(time.time() - started, 1)
+    save_training_artifacts(
+        model,
+        tokenizer,
+        output_dir,
+        style,
+        history,
+        steps=len(history),
+        elapsed_sec=elapsed,
+    )
+    print(f"[{style}] готово: {output_dir}, шагов={len(history)}, {elapsed} с")
     return history
 
 
