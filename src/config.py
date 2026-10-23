@@ -20,23 +20,15 @@ BASE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 SEED = 42
 MAX_SEQ_LEN = 1024
 
-LORA_R = 16
-LORA_ALPHA = 32
-LORA_DROPOUT = 0.05
-LORA_TARGET_MODULES = [
-    "q_proj",
-    "k_proj",
-    "v_proj",
-    "o_proj",
-    "gate_proj",
-    "up_proj",
-    "down_proj",
-]
+LORA_R = 8
+LORA_ALPHA = 16
+LORA_DROPOUT = 0.1
+LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
-TRAIN_EPOCHS = 10
+TRAIN_EPOCHS = 5
 TRAIN_BATCH_SIZE = 2
 GRADIENT_ACCUMULATION_STEPS = 2
-LEARNING_RATE = 2e-4
+LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.0
 WARMUP_RATIO = 0.1
 MAX_GRAD_NORM = 1.0
