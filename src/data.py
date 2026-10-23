@@ -85,6 +85,8 @@ def sample_few_shot_examples(
     if count < 0 or count > len(records):
         raise ValueError(f"count={count} должен быть от 0 до {len(records)}")
     return random.Random(seed).sample(records, count)
+
+
 def split_train_validation(
     records: list[dict],
     val_size: int = config.VAL_SIZE,
