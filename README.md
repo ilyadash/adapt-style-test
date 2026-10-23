@@ -1,0 +1,2 @@
+# adapt-style-test
+
