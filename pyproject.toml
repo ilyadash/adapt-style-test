@@ -1,0 +1,29 @@
+[project]
+name = "adapt-style-test"
+version = "0.1.0"
+description = "Адаптация Qwen2.5-1.5B-Instruct под стили двух Telegram-каналов"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "accelerate>=1.0",
+    "datasets>=3.0",
+    "peft>=0.13",
+    "torch>=2.6",
+    "transformers>=4.46",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
