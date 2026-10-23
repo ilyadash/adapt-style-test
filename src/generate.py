@@ -35,6 +35,8 @@ def load_few_shot_examples(
 ) -> list[dict] | None:
     """Возвращает few-shot примеры для baseline или ``None`` для LoRA.
 
+    Примеры выбираются случайно с фиксированным ``config.SEED``.
+
     Args:
         style: Идентификатор стиля — ``type1`` или ``type2``.
         adapter_dir: Каталог LoRA-адаптера или ``None`` для baseline.
@@ -44,7 +46,7 @@ def load_few_shot_examples(
     """
     if adapter_dir is not None:
         return None
-    return data.load_train_records(style)[: config.FEW_SHOT_COUNT]
+    return data.sample_few_shot_examples(data.load_train_records(style))
 
 
 def generate_for_record(

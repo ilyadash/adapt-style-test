@@ -8,6 +8,7 @@ def test_imports() -> None:
     assert config.BASE_MODEL
     assert config.MAX_SEQ_LEN > 0
     assert callable(data.load_train_records)
+    assert callable(data.sample_few_shot_examples)
     assert callable(prompts.build_messages)
 
 
@@ -20,6 +21,21 @@ def test_train_datasets() -> None:
             assert {"instruction", "input", "output"} <= record.keys()
             assert record["input"].strip()
             assert record["output"].strip()
+
+
+def test_sample_few_shot_examples() -> None:
+    """Проверяет воспроизводимость и размер случайной few-shot выборки."""
+    records = data.load_train_records("type1")
+    first = data.sample_few_shot_examples(records)
+    second = data.sample_few_shot_examples(records)
+    other = data.sample_few_shot_examples(records, seed=config.SEED + 1)
+
+    assert first == second
+    assert first != other
+    assert len(first) == config.FEW_SHOT_COUNT
+    assert len({record["input"] for record in first}) == config.FEW_SHOT_COUNT
+    assert all(record in records for record in first)
+    assert first != records[: config.FEW_SHOT_COUNT]
 
 
 def test_test_inputs() -> None:

@@ -12,6 +12,8 @@ from src import config, data, modeling, prompts
 def generate_baseline(style: str, num_candidates: int, output_path: Path) -> list[dict]:
     """Генерирует ответы базовой моделью с few-shot примерами.
 
+    Примеры выбираются случайно с фиксированным ``config.SEED``.
+
     Args:
         style: Идентификатор стиля — ``type1`` или ``type2``.
         num_candidates: Количество вариантов на каждый тестовый вход.
@@ -24,7 +26,7 @@ def generate_baseline(style: str, num_candidates: int, output_path: Path) -> lis
     tokenizer = modeling.load_tokenizer()
     model = modeling.load_base_model()
     device = modeling.get_device()
-    examples = data.load_train_records(style)[: config.FEW_SHOT_COUNT]
+    examples = data.sample_few_shot_examples(data.load_train_records(style))
 
     results: list[dict] = []
     for record in data.load_test_inputs():
