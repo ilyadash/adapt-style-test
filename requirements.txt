@@ -1,0 +1,10 @@
+# Прямые зависимости, проверенные на RTX 4070 SUPER (Python 3.12.13).
+# Основной способ установки: uv sync (см. README.md).
+# Для pip сначала поставьте torch с CUDA-индексом:
+#   pip install torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+accelerate==1.15.0
+datasets==5.1.0
+peft==0.21.2
+torch==2.11.0+cu128
+transformers==5.20.2
+pytest==9.1.1
