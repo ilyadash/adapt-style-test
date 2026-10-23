@@ -1,6 +1,6 @@
 """Быстрый smoke-тест: импорты, данные, промпты и формат выходных файлов."""
 
-from src import config, data, prompts
+from src import config, data, prompts, write_outputs
 
 
 def test_imports() -> None:
@@ -66,6 +66,14 @@ def test_prompts_contain_text_and_style() -> None:
         user_content = messages[-1]["content"]
         assert marker in system_content
         assert news_text in user_content
+
+
+def test_normalize_post() -> None:
+    """Проверяет нормализацию служебных маркеров канала."""
+    post = write_outputs.normalize_post("@BankiOil: готово @BankiOil", "type1")
+    assert post == "готово @banki_oil"
+    assert write_outputs.normalize_post("Текст", "type1").endswith("@banki_oil")
+    assert write_outputs.normalize_post("@banki_oil: текст", "type2") == "текст"
 
 
 def test_outputs_format_if_present() -> None:
