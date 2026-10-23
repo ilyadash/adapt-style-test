@@ -85,6 +85,36 @@ def sample_few_shot_examples(
     if count < 0 or count > len(records):
         raise ValueError(f"count={count} должен быть от 0 до {len(records)}")
     return random.Random(seed).sample(records, count)
+def split_train_validation(
+    records: list[dict],
+    val_size: int = config.VAL_SIZE,
+    seed: int = config.SEED,
+) -> tuple[list[dict], list[dict]]:
+    """Делит записи на train и validation с фиксированным seed.
+
+    Args:
+        records: Полный список обучающих записей.
+        val_size: Размер validation-выборки.
+        seed: Seed для детерминированного перемешивания.
+
+    Returns:
+        Кортеж ``(train_records, val_records)`` без пересечений.
+
+    Raises:
+        ValueError: Если ``val_size`` не помещается в выборку.
+    """
+    if not 0 < val_size < len(records):
+        raise ValueError(
+            f"val_size={val_size} должен быть больше 0 и меньше {len(records)}"
+        )
+    indices = list(range(len(records)))
+    random.Random(seed).shuffle(indices)
+    val_indices = set(indices[:val_size])
+    train_records = [
+        record for index, record in enumerate(records) if index not in val_indices
+    ]
+    val_records = [records[index] for index in indices[:val_size]]
+    return train_records, val_records
 
 
 def load_test_inputs() -> list[dict]:

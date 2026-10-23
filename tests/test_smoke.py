@@ -38,6 +38,17 @@ def test_sample_few_shot_examples() -> None:
     assert first != records[: config.FEW_SHOT_COUNT]
 
 
+def test_train_validation_split() -> None:
+    """Проверяет размеры и отсутствие пересечений train/validation."""
+    records = data.load_train_records("type1")
+    train_records, val_records = data.split_train_validation(records)
+    assert len(train_records) == 20
+    assert len(val_records) == 5
+    train_inputs = {record["input"] for record in train_records}
+    val_inputs = {record["input"] for record in val_records}
+    assert not train_inputs & val_inputs
+
+
 def test_test_inputs() -> None:
     """Проверяет, что тестовых входов ровно пять и id уникальны."""
     records = data.load_test_inputs()

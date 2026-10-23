@@ -2,13 +2,19 @@
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
 import torch
 from datasets import Dataset
 from peft import LoraConfig, PeftModel, get_peft_model
-from transformers import PreTrainedTokenizerBase, Trainer, TrainingArguments
+from transformers import (
+    EarlyStoppingCallback,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
+)
 
 from src import config, data, modeling, prompts
 
@@ -126,6 +132,7 @@ def make_training_arguments(
     return TrainingArguments(
         output_dir=str(output_dir),
         per_device_train_batch_size=config.TRAIN_BATCH_SIZE,
+        per_device_eval_batch_size=config.TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=config.GRADIENT_ACCUMULATION_STEPS,
         num_train_epochs=epochs,
         max_steps=max_steps if max_steps is not None else -1,
@@ -139,7 +146,13 @@ def make_training_arguments(
         fp16=False,
         logging_steps=5,
         logging_first_step=True,
-        save_strategy="no",
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        save_total_limit=1,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        prediction_loss_only=True,
         report_to="none",
         remove_unused_columns=False,
         dataloader_num_workers=0,
@@ -155,6 +168,9 @@ def save_training_artifacts(
     output_dir: Path,
     style: str,
     elapsed_sec: float,
+    eval_metrics: dict,
+    train_size: int,
+    val_size: int,
 ) -> list[dict]:
     """Сохраняет LoRA-адаптер, токенизатор и лог обучения.
 
@@ -164,6 +180,9 @@ def save_training_artifacts(
         output_dir: Каталог для сохранения.
         style: Идентификатор стиля.
         elapsed_sec: Затраченное время в секундах.
+        eval_metrics: Результат ``trainer.evaluate()``.
+        train_size: Размер обучающей выборки.
+        val_size: Размер validation-выборки.
 
     Returns:
         История обучения из логов Trainer.
@@ -181,6 +200,18 @@ def save_training_artifacts(
         for entry in trainer.state.log_history
         if "loss" in entry
     ]
+    eval_history = [
+        {
+            "step": entry.get("step"),
+            "epoch": entry.get("epoch"),
+            "eval_loss": entry.get("eval_loss"),
+            "eval_perplexity": math.exp(entry["eval_loss"])
+            if entry.get("eval_loss") is not None
+            else None,
+        }
+        for entry in trainer.state.log_history
+        if "eval_loss" in entry
+    ]
     train_loss = next(
         (
             entry["train_loss"]
@@ -189,12 +220,20 @@ def save_training_artifacts(
         ),
         None,
     )
+    eval_loss = eval_metrics.get("eval_loss")
     log = {
         "style": style,
         "steps": trainer.state.global_step,
         "elapsed_sec": elapsed_sec,
+        "train_size": train_size,
+        "val_size": val_size,
         "train_loss": train_loss,
+        "eval_loss": eval_loss,
+        "eval_perplexity": math.exp(eval_loss) if eval_loss is not None else None,
+        "best_metric": trainer.state.best_metric,
+        "best_model_checkpoint": trainer.state.best_model_checkpoint,
         "history": history,
+        "eval_history": eval_history,
     }
     (output_dir / "training_log.json").write_text(
         json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -221,25 +260,53 @@ def train_style(
     """
     modeling.set_seed()
     model, tokenizer = build_lora_model()
-    examples = encode_records(data.load_train_records(style), tokenizer)
-    train_dataset = Dataset.from_list(examples)
+    train_records, val_records = data.split_train_validation(
+        data.load_train_records(style)
+    )
+    train_examples = encode_records(train_records, tokenizer)
+    val_examples = encode_records(val_records, tokenizer)
+    train_dataset = Dataset.from_list(train_examples)
+    val_dataset = Dataset.from_list(val_examples)
     collator = make_collator(tokenizer.pad_token_id)
     training_args = make_training_arguments(output_dir, epochs, max_steps)
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
+        eval_dataset=val_dataset,
         data_collator=collator,
         processing_class=tokenizer,
+        callbacks=[
+            EarlyStoppingCallback(
+                early_stopping_patience=config.EARLY_STOPPING_PATIENCE
+            )
+        ],
     )
 
     started = time.time()
     trainer.train()
+    eval_metrics = trainer.evaluate()
     elapsed = round(time.time() - started, 1)
     history = save_training_artifacts(
-        trainer, tokenizer, output_dir, style, elapsed
+        trainer,
+        tokenizer,
+        output_dir,
+        style,
+        elapsed,
+        eval_metrics,
+        len(train_examples),
+        len(val_examples),
     )
-    print(f"[{style}] готово: {output_dir}, шагов={trainer.state.global_step}, {elapsed} с")
+    eval_loss = eval_metrics.get("eval_loss")
+    if eval_loss is not None:
+        print(
+            f"[{style}] eval_loss={eval_loss:.4f}, "
+            f"perplexity={math.exp(eval_loss):.2f}"
+        )
+    print(
+        f"[{style}] готово: {output_dir}, "
+        f"шагов={trainer.state.global_step}, {elapsed} с"
+    )
     return history
 
 
