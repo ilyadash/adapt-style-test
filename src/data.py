@@ -1,6 +1,7 @@
 """Загрузка и валидация JSONL-датасетов проекта."""
 
 import json
+import random
 from pathlib import Path
 
 from src import config
@@ -61,6 +62,29 @@ def load_train_records(style: str) -> list[dict]:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{style}, запись {index}: пустое поле {field}")
     return records
+
+
+def sample_few_shot_examples(
+    records: list[dict],
+    count: int = config.FEW_SHOT_COUNT,
+    seed: int = config.SEED,
+) -> list[dict]:
+    """Случайно выбирает few-shot примеры с воспроизводимым seed.
+
+    Args:
+        records: Полный список обучающих записей.
+        count: Сколько примеров выбрать.
+        seed: Seed для фиксирования случайного выбора.
+
+    Returns:
+        Список выбранных записей в случайном порядке.
+
+    Raises:
+        ValueError: Если ``count`` отрицательный или больше числа записей.
+    """
+    if count < 0 or count > len(records):
+        raise ValueError(f"count={count} должен быть от 0 до {len(records)}")
+    return random.Random(seed).sample(records, count)
 
 
 def load_test_inputs() -> list[dict]:
