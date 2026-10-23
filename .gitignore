@@ -185,3 +185,6 @@ artifacts/
 
 # Local datasets are not committed
 data/
+
+# uv.lock коммитится отдельной веткой
+uv.lock
